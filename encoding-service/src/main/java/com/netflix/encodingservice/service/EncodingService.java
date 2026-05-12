@@ -8,7 +8,9 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.Arrays;
@@ -55,7 +57,7 @@ public class EncodingService {
 
             //  Step 1: Download raw video from S3
             String localVideoPath = jobPath + "/raw_video.mp4";
-            downalodFromS3(event.getVideoKey(), localVideoPath);
+            downloadFromS3(event.getVideoKey(), localVideoPath);
             log.info("Raw video download to local video path: {}", localVideoPath);
 
             // Step 2: Encode to multiple qualities and generate HLS
@@ -111,5 +113,48 @@ public class EncodingService {
         } finally {
             cleanupTempFiles(jobPath);
         }
+    }
+
+    /**
+     * Download file form S3 to local path
+     */
+    private void downloadFromS3(String videoKey, String localVideoPath) {
+        GetObjectRequest getObjectRequest = GetObjectRequest.builder()
+                .bucket(bucketName)
+                .key(videoKey)
+                .build();
+        s3Client.getObject(getObjectRequest, Paths.get(localVideoPath));
+
+    }
+
+    private void encodeToHls(String inputPath, String outputDir, int width, int bitrate, int height) throws IOException, InterruptedException {
+
+        String playListPath = outputDir + "/playlist.m3u8";
+        String segmentPattern = outputDir + "/segment_%03d.ts";
+
+        //  FFmpeg command for HLS encoding
+        List<String> command = Arrays.asList(
+                ffmpegPath,
+                "-i", inputPath,                            //  input file
+                "-vf", "scale=" + width + ":" + height,     // Scale to resolution
+                "-c:v", "libx264",                          // video codec
+                "-b:v", bitrate + "k",                      // video bitrate
+                "-c:a", "aac",                              // audio codec
+                "-b:a", "128k",                             // audio bitrate
+                "-hls_time", "10",                          // 10 second segment
+                "-hls_list_size", "0",                      // keep all segment
+                "-hls_segment_filename", segmentPattern,    // segment naming
+                "-f", "hls",                                // output format HLS
+                playListPath                                // output playlist
+        );
+
+        ProcessBuilder processBuilder = new ProcessBuilder(command);
+        processBuilder.redirectErrorStream(true);
+        Process process = processBuilder.start();
+        int exitCode = process.waitFor();
+        if(exitCode != 0) {
+            throw new RuntimeException("FFmpeg encoding failed with exit code: " + exitCode);
+        }
+
     }
 }
