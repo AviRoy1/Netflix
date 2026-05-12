@@ -7,14 +7,18 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
+import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
+import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 
+import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 
 @Service
 @Slf4j
@@ -75,7 +79,7 @@ public class EncodingService {
 
             //  Step 3: Generate master playlist.
             String masterPlayListPath = jobPath + "/encoded/master.m3u8";
-            generatemasterPlayList(masterPlayListPath);
+            generateMasterPlayList(masterPlayListPath);
             log.info("Master playlist generated.");
 
             // Step 4: Upload all resource file to S3
@@ -114,6 +118,7 @@ public class EncodingService {
             cleanupTempFiles(jobPath);
         }
     }
+
 
     /**
      * Download file form S3 to local path
@@ -157,4 +162,57 @@ public class EncodingService {
         }
 
     }
+
+
+    private void generateMasterPlayList(String masterPlayListPath) throws IOException {
+        StringBuilder master = new StringBuilder();
+        master.append("#EXTM3u\n");
+        master.append("EXT-X-VERSION:3\n\n");
+
+        // Add each quality to master playlist
+        int[][] qualities = {{1920, 5000, 1080}, {1280, 2800, 720}, {854, 1200, 480}, {640, 800, 360}};
+
+        for(int []q: qualities) {
+            int width = q[0];
+            int bitrate = q[1];
+            int height = q[2];
+
+            master.append("#EXT-X-STREAM-INF:BANDWIDTH=")
+                    .append(bitrate*1000)
+                    .append(", RESOLUTION=").append(width).append("x").append(height)
+                    .append(",CODECS=\"avc1.42e01e,mp4a.40.2\"\n");
+            master.append(height).append("p/playlist.m3u8\n\n");
+
+        }
+        Files.writeString(Paths.get(masterPlayListPath), master.toString());
+    }
+
+    private void uploadEncodedFileToS3(String localDir, String encodedPrefix) {
+        File directory  = new File(localDir);
+        uploadDirectoryToS3(directory, localDir,encodedPrefix);
+    }
+
+    private void uploadDirectoryToS3(File directory, String localDir, String s3Prefix) {
+        for(File file: Objects.requireNonNull(directory.listFiles())) {
+            if(file.isDirectory()) {
+                uploadDirectoryToS3(file, localDir, s3Prefix);
+            } else {
+                String relativePath = file.getAbsolutePath()
+                        .substring(basePath.length()+1)
+                        .replace("\\", "/");
+
+                String s3Key = s3Prefix + relativePath;
+                String contentType = file.getName().endsWith(".m3u8") ? "application/x-mpegURL" : "video/MP2T";
+
+                PutObjectRequest putObjectRequest = PutObjectRequest.builder()
+                        .bucket(bucketName)
+                        .key(s3Key)
+                        .contentType(contentType)
+                        .build();
+                s3Client.putObject(putObjectRequest, RequestBody.fromFile(file));
+                log.debug("Uploaded: {}", s3Key);
+            }
+        }
+    }
+
 }
