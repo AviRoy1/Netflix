@@ -15,6 +15,7 @@ import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.List;
@@ -48,7 +49,7 @@ public class EncodingService {
     );
 
 
-    public void encodeVideo(VideoUploadedEvent event) {
+    public void encodeVideo(VideoUploadedEvent event) throws IOException {
         log.info("Starting encoding platform for movie: {}", event.getMovieId());
 
         //  Create a unique path for movie
@@ -187,12 +188,12 @@ public class EncodingService {
         Files.writeString(Paths.get(masterPlayListPath), master.toString());
     }
 
-    private void uploadEncodedFileToS3(String localDir, String encodedPrefix) {
+    private void uploadEncodedFileToS3(String localDir, String encodedPrefix) throws IOException{
         File directory  = new File(localDir);
         uploadDirectoryToS3(directory, localDir,encodedPrefix);
     }
 
-    private void uploadDirectoryToS3(File directory, String localDir, String s3Prefix) {
+    private void uploadDirectoryToS3(File directory, String localDir, String s3Prefix) throws IOException{
         for(File file: Objects.requireNonNull(directory.listFiles())) {
             if(file.isDirectory()) {
                 uploadDirectoryToS3(file, localDir, s3Prefix);
@@ -212,6 +213,21 @@ public class EncodingService {
                 s3Client.putObject(putObjectRequest, RequestBody.fromFile(file));
                 log.debug("Uploaded: {}", s3Key);
             }
+        }
+    }
+
+    private void cleanupTempFiles(String jobPath) throws IOException{
+        try {
+            Path dirPath = Paths.get(jobPath);
+            if(Files.exists(dirPath)) {
+                Files.walk(dirPath)
+                        .sorted(java.util.Comparator.reverseOrder())
+                        .map(Path::toFile)
+                        .forEach(File::delete);
+            }
+
+        } catch(IOException e) {
+            log.warn("Fail to clean up temp files: {}" , e.getMessage());
         }
     }
 
